@@ -1,0 +1,26 @@
+{
+  "AAPL": [
+    {
+      "ts": "2026-09-25T14:30:00Z",
+      "open": 220.5,
+      "high": 221.0,
+      "low": 220.2,
+      "close": 220.8,
+      "volume": 1500.0,
+      "provider": "mock",
+      "revision": 1,
+      "ingested_at": "2026-09-25T14:31:00Z"
+    },
+    {
+      "ts": "2026-09-25T14:31:00Z",
+      "open": 220.8,
+      "high": 221.5,
+      "low": 220.6,
+      "close": 221.2,
+      "volume": 1800.0,
+      "provider": "mock",
+      "revision": 1,
+      "ingested_at": "2026-09-25T14:32:00Z"
+    }
+  ]
+}

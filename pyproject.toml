@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qdata"
+version = "0.1.0"
+description = "Market data library and CLI tool: ingests, stores, catalogs, and serves market data."
+authors = [{ name = "qdata developers" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+    "keyring>=24.0.0",
+    "tomli-w>=1.0.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+qdata = "qdata.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qdata*"]

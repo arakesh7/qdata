@@ -1,0 +1,59 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging and builds
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Secrets, Environment Files & Credentials (DO NOT COMMIT)
+.env
+.env.*
+!.env.example
+*.env
+credentials.toml
+credentials.json
+secrets.toml
+secrets.json
+*.key
+*.pem
+*.cer
+*.crt
+*.pfx
+*.p12
+
+# Cached Tokens & Local Storage
+.tokens/
+tokens/
+*.token
+.sync.lock
+
+# Data Directory & Partitions (Store market data locally, not in Git)
+data/
+quarantine/
+*.parquet
+
+# Temporary & Swap Files
+*.tmp*
+*.temp*
+*.swp
+*.swo
+*~
+*.log
+
+# OS & IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
