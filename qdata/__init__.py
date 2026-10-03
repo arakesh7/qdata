@@ -18,6 +18,7 @@ from qdata.providers import (
     register_provider,
 )
 from qdata.quality import QualityFailureError, QualityReport, validate_bars
+from qdata.reader import DataReader
 from qdata.store import (
     CANONICAL_COLUMNS,
     CANONICAL_SCHEMA,
@@ -36,6 +37,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
+    "DataReader",
     "SyncEngine",
     "CatalogManager",
     "ManifestManager",
