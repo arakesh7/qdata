@@ -6,9 +6,10 @@ Uses catalog-guided O(1) partition pruning, PyArrow columnar projection, and C++
 pushdown to deliver sub-millisecond data loading without global state.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import pyarrow as pa
@@ -145,7 +146,7 @@ class DataReader:
 
         return candidate_files
 
-    def load(
+    def _load_single(
         self,
         symbol: str,
         timeframe: str = "1min",
@@ -157,10 +158,7 @@ class DataReader:
         set_index: bool = True,
         as_arrow: bool = False,
     ) -> Union[pd.DataFrame, pa.Table]:
-        """
-        High-performance market data loader for backtesting and quantitative research.
-        Supports predicate pushdown, column projection, and timezone-aware formatting.
-        """
+        """Internal loader for an individual symbol."""
         norm_tf = normalize_timeframe(timeframe)
         target_layer = layer or self.layer
         target_tz = "Asia/Kolkata" if tz and tz.upper() == "IST" else tz
@@ -218,6 +216,67 @@ class DataReader:
                 df = df.reset_index(drop=True)
 
         return df
+
+    def load(
+        self,
+        symbol: Union[str, Sequence[str]],
+        timeframe: str = "1min",
+        start: Optional[Union[datetime, str, pd.Timestamp]] = None,
+        end: Optional[Union[datetime, str, pd.Timestamp]] = None,
+        columns: Optional[List[str]] = None,
+        layer: Optional[str] = None,
+        tz: Optional[str] = None,
+        set_index: bool = True,
+        as_arrow: bool = False,
+    ) -> Union[pd.DataFrame, pa.Table, Dict[str, Union[pd.DataFrame, pa.Table]]]:
+        """
+        High-performance market data loader for backtesting and quantitative research.
+
+        When a single symbol string is passed, returns a pd.DataFrame (or pa.Table).
+        When a sequence of symbols is passed, returns a Dict[str, pd.DataFrame / pa.Table].
+        """
+        # Fast path for single symbol
+        if isinstance(symbol, str):
+            return self._load_single(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                columns=columns,
+                layer=layer,
+                tz=tz,
+                set_index=set_index,
+                as_arrow=as_arrow,
+            )
+
+        # Multi-symbol handling -> Returns dictionary of streams
+        symbols = [s.strip().upper() for s in symbol]
+        if not symbols:
+            return {}
+
+        max_workers = min(16, max(1, len(symbols)))
+        results: Dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_sym = {
+                executor.submit(
+                    self._load_single,
+                    symbol=sym,
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    columns=columns,
+                    layer=layer,
+                    tz=tz,
+                    set_index=set_index,
+                    as_arrow=as_arrow,
+                ): sym
+                for sym in symbols
+            }
+            for fut in future_to_sym:
+                sym = future_to_sym[fut]
+                results[sym] = fut.result()
+
+        return results
 
     def list_symbols(self, layer: Optional[str] = None) -> List[str]:
         """List all symbols stored in this data directory."""

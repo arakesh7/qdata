@@ -264,3 +264,60 @@ def test_reader_timezone_as_arrow(tmp_data_dir: Path):
     ts_field = table.schema.field("ts")
     assert ts_field.type == pa.timestamp("us", tz="Asia/Kolkata")
     assert table.num_rows > 0
+
+
+def test_reader_multi_symbol_dict(tmp_data_dir: Path):
+    """Verify loading multiple symbols returns a dictionary of DataFrames."""
+    engine = SyncEngine(tmp_data_dir)
+    fixed_time = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=fixed_time)
+
+    engine.sync_dataset(mock, symbol="RELIANCE", timeframe="1d")
+    engine.sync_dataset(mock, symbol="TCS", timeframe="1d")
+
+    reader = DataReader(tmp_data_dir)
+    res_dict = reader.load(["RELIANCE", "TCS"], timeframe="1d")
+
+    assert isinstance(res_dict, dict)
+    assert set(res_dict.keys()) == {"RELIANCE", "TCS"}
+    assert not res_dict["RELIANCE"].empty
+    assert not res_dict["TCS"].empty
+    assert isinstance(res_dict["RELIANCE"].index, pd.DatetimeIndex)
+    assert isinstance(res_dict["TCS"].index, pd.DatetimeIndex)
+
+
+def test_reader_multi_symbol_as_arrow(tmp_data_dir: Path):
+    """Verify loading multiple symbols as Arrow returns a dictionary of Tables."""
+    engine = SyncEngine(tmp_data_dir)
+    fixed_time = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=fixed_time)
+
+    engine.sync_dataset(mock, symbol="HDFC", timeframe="1d")
+    engine.sync_dataset(mock, symbol="ICICI", timeframe="1d")
+
+    reader = DataReader(tmp_data_dir)
+    tables = reader.load(["HDFC", "ICICI"], timeframe="1d", as_arrow=True)
+
+    assert isinstance(tables, dict)
+    assert set(tables.keys()) == {"HDFC", "ICICI"}
+    assert isinstance(tables["HDFC"], pa.Table)
+    assert isinstance(tables["ICICI"], pa.Table)
+    assert tables["HDFC"].num_rows > 0
+    assert tables["ICICI"].num_rows > 0
+
+
+def test_reader_multi_symbol_partial_missing(tmp_data_dir: Path):
+    """Verify multi-symbol query handles nonexistent tickers gracefully."""
+    engine = SyncEngine(tmp_data_dir)
+    fixed_time = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=fixed_time)
+
+    engine.sync_dataset(mock, symbol="SBIN", timeframe="1d")
+
+    reader = DataReader(tmp_data_dir)
+    res = reader.load(["SBIN", "NONEXISTENT_TICKER"], timeframe="1d")
+
+    assert isinstance(res, dict)
+    assert not res["SBIN"].empty
+    assert res["NONEXISTENT_TICKER"].empty
+    assert isinstance(res["NONEXISTENT_TICKER"], pd.DataFrame)
