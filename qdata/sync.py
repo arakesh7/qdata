@@ -198,6 +198,15 @@ class PartitionSyncHandler:
         return written_files, new_open_partition
 
 
+def parse_symbols(
+    symbols: Optional[Union[str, List[str]]] = None,
+    symbols_file: Optional[Union[str, Path]] = None,
+) -> Optional[List[str]]:
+    """Parse symbol inputs using qdata.cli symbol parsing utilities."""
+    from qdata.cli import parse_symbols as _parse
+    return _parse(symbol=symbols, symbols_file=symbols_file)
+
+
 class SyncEngine:
     """
     Universal sync engine implementing the 4 core design principles:
@@ -414,7 +423,8 @@ class SyncEngine:
     def sync(
         self,
         provider_name: str = "mock",
-        symbols: Optional[List[str]] = None,
+        symbols: Optional[Union[str, List[str]]] = None,
+        symbols_file: Optional[Union[str, Path]] = None,
         timeframe: str = "1min",
         start: Optional[Union[datetime, str]] = None,
         end: Optional[Union[datetime, str]] = None,
@@ -425,10 +435,11 @@ class SyncEngine:
         Execute sync for multiple symbols under a cross-process lock.
         Raises LockHeldError if another process holds the sync lock.
         """
-        if not symbols:
+        target_symbols = parse_symbols(symbols=symbols, symbols_file=symbols_file)
+        if not target_symbols:
             self.catalog.init_catalog()
             inst_df = self.catalog.list_instruments()
-            symbols = inst_df["symbol"].tolist() if not inst_df.empty else ["AAPL"]
+            target_symbols = inst_df["symbol"].tolist() if not inst_df.empty else ["AAPL"]
 
         provider = get_provider(provider_name, data_dir=self.data_dir)
         provider.connect()
@@ -436,7 +447,7 @@ class SyncEngine:
         results = []
         try:
             with self.lock:
-                for sym in symbols:
+                for sym in target_symbols:
                     res = self.sync_dataset(
                         provider=provider,
                         symbol=sym,

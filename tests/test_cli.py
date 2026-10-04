@@ -132,3 +132,67 @@ def test_cli_lock_held_exit_code_3(tmp_data_dir: Path):
         assert data["error"] == "lock_held"
     finally:
         lock.release()
+
+
+def test_cli_sync_comma_separated_symbols(tmp_data_dir: Path):
+    runner.invoke(app, ["init", "--data-dir", str(tmp_data_dir)])
+    sync_res = runner.invoke(
+        app,
+        ["sync", "--provider", "mock", "--symbol", "TCS,INFY", "--timeframe", "1d", "--data-dir", str(tmp_data_dir), "--json"]
+    )
+    assert sync_res.exit_code == 0
+    sync_data = json.loads(sync_res.stdout)
+    assert len(sync_data) == 2
+    symbols = [r["symbol"] for r in sync_data]
+    assert symbols == ["TCS", "INFY"]
+
+
+def test_cli_sync_symbols_file(tmp_data_dir: Path, tmp_path: Path):
+    runner.invoke(app, ["init", "--data-dir", str(tmp_data_dir)])
+    csv_file = tmp_path / "tickers.csv"
+    csv_file.write_text("# Top Indian Stocks\nsymbol\nRELIANCE\nHDFCBANK\n", encoding="utf-8")
+
+    sync_res = runner.invoke(
+        app,
+        ["sync", "--provider", "mock", "--symbols-file", str(csv_file), "--timeframe", "1d", "--data-dir", str(tmp_data_dir), "--json"]
+    )
+    assert sync_res.exit_code == 0
+    sync_data = json.loads(sync_res.stdout)
+    assert len(sync_data) == 2
+    symbols = [r["symbol"] for r in sync_data]
+    assert symbols == ["RELIANCE", "HDFCBANK"]
+
+
+def test_cli_symbol_parsing_methods(tmp_path: Path):
+    from qdata.cli import (
+        clean_symbol,
+        read_symbols_from_file,
+        parse_symbols_from_str,
+        parse_symbols,
+    )
+
+    # 1. clean_symbol unit tests
+    assert clean_symbol("  reliance  ") == "RELIANCE"
+    assert clean_symbol('"TCS"') == "TCS"
+    assert clean_symbol("'INFY'") == "INFY"
+    assert clean_symbol("symbol") is None
+    assert clean_symbol("TICKER") is None
+    assert clean_symbol("   ") is None
+
+    # 2. parse_symbols_from_str unit tests
+    assert parse_symbols_from_str("AAPL, MSFT, , GOOG") == ["AAPL", "MSFT", "GOOG"]
+    assert parse_symbols_from_str(["nifty", "banknifty"]) == ["NIFTY", "BANKNIFTY"]
+
+    # 3. read_symbols_from_file unit tests
+    f_path = tmp_path / "symbols_test.csv"
+    f_path.write_text(
+        "# Header comment\nsymbol\nRELIANCE\n  TCS  \n\"INFY\", \"HDFC\"\n\n",
+        encoding="utf-8",
+    )
+    from_file = read_symbols_from_file(f_path)
+    assert from_file == ["RELIANCE", "TCS", "INFY", "HDFC"]
+
+    # 4. parse_symbols composition & deduplication
+    combined = parse_symbols(symbol="TCS, WIPRO", symbols_file=f_path)
+    # Order preserved, deduplicated: RELIANCE, TCS, INFY, HDFC, WIPRO
+    assert combined == ["RELIANCE", "TCS", "INFY", "HDFC", "WIPRO"]

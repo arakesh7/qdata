@@ -2,7 +2,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import typer
@@ -117,13 +117,88 @@ def init_cmd(
     raise typer.Exit(code=0)
 
 
+HEADER_SYMBOLS = frozenset({"SYMBOL", "TICKER"})
+
+
+def clean_symbol(token: str) -> Optional[str]:
+    """
+    Sanitize an individual symbol token.
+    Strips whitespace and surrounding quotes, converts to uppercase,
+    and filters out empty strings or standard CSV header words.
+    """
+    cleaned = token.strip().strip("\"'").upper()
+    if cleaned and cleaned not in HEADER_SYMBOLS:
+        return cleaned
+    return None
+
+
+def read_symbols_from_file(file_path: Union[str, Path]) -> List[str]:
+    """
+    Read ticker symbols from a CSV or line-delimited text file.
+    Supports single symbols per line or comma-separated tokens,
+    while ignoring blank lines and '#' comments.
+    """
+    symbols: List[str] = []
+    path = Path(file_path).resolve()
+    if not path.is_file():
+        return symbols
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                for part in line.split(","):
+                    sym = clean_symbol(part)
+                    if sym:
+                        symbols.append(sym)
+    return symbols
+
+
+def parse_symbols_from_str(symbols_input: Union[str, Sequence[str]]) -> List[str]:
+    """
+    Parse ticker symbols from a comma-separated string or sequence of strings.
+    """
+    symbols: List[str] = []
+    items = symbols_input.split(",") if isinstance(symbols_input, str) else list(symbols_input)
+    for item in items:
+        sym = clean_symbol(str(item))
+        if sym:
+            symbols.append(sym)
+    return symbols
+
+
+def parse_symbols(
+    symbol: Optional[Union[str, Sequence[str]]] = None,
+    symbols_file: Optional[Union[str, Path]] = None,
+) -> Optional[List[str]]:
+    """
+    Aggregate, sanitize, and deduplicate symbols from CLI arguments
+    (string, list, or file), preserving original input order.
+    """
+    file_symbols = read_symbols_from_file(symbols_file) if symbols_file else []
+    cli_symbols = parse_symbols_from_str(symbol) if symbol else []
+    combined = file_symbols + cli_symbols
+
+    return list(dict.fromkeys(combined)) if combined else None
+
+
 # ---------------------------------------------------------
 # qdata sync
 # ---------------------------------------------------------
 @app.command(name="sync")
 def sync_cmd(
     provider: str = typer.Option("mock", "--provider", help="Provider name (e.g. mock, upstox, fyers, amfi)."),
-    symbol: Optional[str] = typer.Option(None, "--symbol", help="Ticker symbol to sync (e.g. AAPL or 120503)."),
+    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Ticker symbol(s) to sync (comma-separated for multiple, e.g. RELIANCE,TCS)."),
+    symbols_file: Optional[Path] = typer.Option(
+        None,
+        "--symbols-file",
+        "-f",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to CSV or text file containing symbols (one per line).",
+    ),
     timeframe: str = typer.Option("1min", "--timeframe", help="Timeframe (1min, 1d)."),
     start: Optional[str] = typer.Option(None, "--start", help="Start date (YYYY-MM-DD or ISO string)."),
     end: Optional[str] = typer.Option(None, "--end", help="End date (YYYY-MM-DD or ISO string)."),
@@ -132,18 +207,18 @@ def sync_cmd(
     strict_quality: bool = typer.Option(False, "--strict-quality", help="Fail if quality checks warn or fail."),
     json_out: bool = typer.Option(False, "--json", help="Output JSON format."),
 ):
-    """Sync market data from provider, validate, and atomically merge into open partition."""
     settings = get_settings(override_data_dir=data_dir)
+    """Sync market data from provider, validate, and atomically merge into open partition."""
     engine = SyncEngine(settings.data_dir)
 
     # AMFI only provides daily NAV data; default 1min to 1d automatically for convenience
     actual_tf = "1d" if provider.lower() == "amfi" and timeframe == "1min" else timeframe
-    symbols = [symbol.upper()] if symbol else None
+    target_symbols = parse_symbols(symbol=symbol, symbols_file=symbols_file)
 
     try:
         results = engine.sync(
             provider_name=provider,
-            symbols=symbols,
+            symbols=target_symbols,
             timeframe=actual_tf,
             start=start,
             end=end,

@@ -227,3 +227,22 @@ def test_sync_historical_backfill(tmp_data_dir: Path):
     ds = catalog.get_dataset("INFY", "1min", layer="raw")
     assert pd.to_datetime(ds["start_ts"], utc=True) == pd.to_datetime("2025-01-01 10:00:00", utc=True)
     assert ds["open_partition"] == "raw/INFY/1min/2025/2025-06.parquet"
+
+
+def test_sync_multiple_symbols_and_symbols_file(tmp_data_dir: Path, tmp_path: Path):
+    """Test SyncEngine.sync with comma string, list of symbols, and symbols_file."""
+    engine = SyncEngine(tmp_data_dir)
+    fixed_time = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=fixed_time)
+
+    # 1. Comma string
+    res_str = engine.sync(provider_name="mock", symbols="AAA, BBB", timeframe="1d")
+    assert len(res_str) == 2
+    assert [r["symbol"] for r in res_str] == ["AAA", "BBB"]
+
+    # 2. File
+    csv_file = tmp_path / "watchlist.csv"
+    csv_file.write_text("# Watchlist\nsymbol\nCCC\nDDD\n", encoding="utf-8")
+    res_file = engine.sync(provider_name="mock", symbols_file=csv_file, timeframe="1d")
+    assert len(res_file) == 2
+    assert [r["symbol"] for r in res_file] == ["CCC", "DDD"]
