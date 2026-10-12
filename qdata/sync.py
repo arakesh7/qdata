@@ -365,7 +365,8 @@ class SyncEngine:
         written_files: List[str],
     ) -> Dict[str, Any]:
         """Update catalog records with expanded boundaries and total rows."""
-        prefix = f"raw/{symbol}/{timeframe}/"
+        safe_sym = symbol.upper().replace("|", "_").replace(":", "_")
+        prefix = f"raw/{safe_sym}/{timeframe}/"
         all_manifest = self.manifest.load()
         total_rows = sum(
             meta.get("row_count", 0)

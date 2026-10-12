@@ -211,8 +211,8 @@ def sync_cmd(
     """Sync market data from provider, validate, and atomically merge into open partition."""
     engine = SyncEngine(settings.data_dir)
 
-    # AMFI only provides daily NAV data; default 1min to 1d automatically for convenience
-    actual_tf = "1d" if provider.lower() == "amfi" and timeframe == "1min" else timeframe
+    # AMFI and Upstox V2 only provide daily data; default 1min to 1d automatically for convenience
+    actual_tf = "1d" if provider.lower() in ("amfi", "upstox") and timeframe == "1min" else timeframe
     target_symbols = parse_symbols(symbol=symbol, symbols_file=symbols_file)
 
     try:

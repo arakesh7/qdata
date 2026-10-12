@@ -99,8 +99,11 @@ class DataReader:
         Avoids recursive directory scanning (rglob / os.walk) for O(1) file selection.
         """
         sym = symbol.upper()
+        safe_sym = sym.replace("|", "_").replace(":", "_")
         norm_tf = normalize_timeframe(timeframe)
         base_dir = self.data_dir / layer / sym / norm_tf
+        if not base_dir.exists():
+            base_dir = self.data_dir / layer / safe_sym / norm_tf
 
         if not base_dir.exists():
             return []

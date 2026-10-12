@@ -186,11 +186,11 @@ def get_partition_relpath(symbol: str, timeframe: str, dt: datetime, layer: str 
     1d:    raw/<SYMBOL>/1d/<YYYY>.parquet
     """
     norm_tf = normalize_timeframe(timeframe)
-    sym = symbol.upper()
+    safe_sym = symbol.upper().replace("|", "_").replace(":", "_")
     year = dt.strftime("%Y")
     if is_monthly_partition(norm_tf):
-        return Path(layer) / sym / norm_tf / year / f"{dt.strftime('%Y-%m')}.parquet"
-    return Path(layer) / sym / norm_tf / f"{year}.parquet"
+        return Path(layer) / safe_sym / norm_tf / year / f"{dt.strftime('%Y-%m')}.parquet"
+    return Path(layer) / safe_sym / norm_tf / f"{year}.parquet"
 
 
 def atomic_write_parquet(
