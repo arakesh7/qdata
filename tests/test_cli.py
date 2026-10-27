@@ -39,6 +39,36 @@ def test_cli_sync_and_catalog_commands(tmp_data_dir: Path):
     assert sync_data[0]["symbol"] == "AAPL"
     assert sync_data[0]["status"] == "success"
 
+    # Re-sync AAPL without force -> should be up to date
+    sync_res2 = runner.invoke(
+        app,
+        ["sync", "--provider", "mock", "--symbol", "AAPL", "--timeframe", "1min", "--data-dir", str(tmp_data_dir), "--json"]
+    )
+    assert sync_res2.exit_code == 0
+    data2 = json.loads(sync_res2.stdout)
+    assert data2[0]["status"] == "up_to_date"
+    assert data2[0]["synced_bars"] == 0
+
+    # Re-sync AAPL with --force -> re-syncs from start
+    sync_res_force = runner.invoke(
+        app,
+        ["sync", "--provider", "mock", "--symbol", "AAPL", "--timeframe", "1min", "--force", "--data-dir", str(tmp_data_dir), "--json"]
+    )
+    assert sync_res_force.exit_code == 0
+    data_force = json.loads(sync_res_force.stdout)
+    assert data_force[0]["status"] == "success"
+    assert data_force[0]["synced_bars"] > 0
+
+    # Re-sync AAPL with -F -> re-syncs from start
+    sync_res_f_short = runner.invoke(
+        app,
+        ["sync", "--provider", "mock", "--symbol", "AAPL", "--timeframe", "1min", "-F", "--data-dir", str(tmp_data_dir), "--json"]
+    )
+    assert sync_res_f_short.exit_code == 0
+    data_f_short = json.loads(sync_res_f_short.stdout)
+    assert data_f_short[0]["status"] == "success"
+    assert data_f_short[0]["synced_bars"] > 0
+
     # Sync with explicit start and end
     sync_range_res = runner.invoke(
         app,

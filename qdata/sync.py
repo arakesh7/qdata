@@ -41,9 +41,11 @@ def plan_sync(
     req_start: Optional[Union[datetime, str]],
     req_end: Optional[Union[datetime, str]],
     latest_avail: datetime,
+    force: bool = False,
 ) -> SyncPlan:
     """
     Compute the exact fetch window based on catalog state and user parameters:
+    - If force=True: ignore existing coverage and fetch from start (req_start or cat_start) to target_end.
     - Initial Ingestion (no catalog data): fetch [req_start -> req_end or latest_avail].
     - Forward Incremental (no req_start): fetch (cat_end -> req_end or latest_avail].
     - Historical Backfill (req_start < cat_start): fetch [req_start -> req_end or latest_avail].
@@ -55,6 +57,11 @@ def plan_sync(
     target_end = end_dt if end_dt is not None else latest_avail
     c_start = pd.to_datetime(cat_start, utc=True).to_pydatetime() if cat_start is not None else None
     c_end = pd.to_datetime(cat_end, utc=True).to_pydatetime() if cat_end is not None else None
+
+    # Case 0: Force re-sync requested from the start
+    if force:
+        fetch_start = start_dt if start_dt is not None else c_start
+        return SyncPlan(fetch_start=fetch_start, fetch_end=target_end, is_up_to_date=False)
 
     # Case 1: Brand new dataset (no prior catalog data)
     if c_end is None:
@@ -123,15 +130,24 @@ class PartitionSyncHandler:
         part_df: pd.DataFrame,
         timeframe: str,
         open_part: Optional[str],
+        force: bool = False,
     ) -> Optional[str]:
         """
         Process a partition group according to the 4 storage rules:
+        - When force=True and partition exists: verify hash, merge, dedupe, rewrite.
         - Open partition: verify hash, merge, dedupe, rewrite.
         - Initial sync (no open partition): merge if exists, write.
         - Closed historical partition: frozen forever, never touch.
         - New partition (rollover or backfilled file): write directly.
         """
         part_path = self.data_dir / part_rel_str
+
+        # When force is True, allow re-syncing and updating existing closed partitions as well
+        if force and part_path.exists():
+            existing_df = self.read_and_verify(part_rel_str)
+            merged_df = self.merge_and_dedupe(existing_df, part_df, timeframe)
+            self.save_partition(part_rel_str, merged_df)
+            return part_rel_str
 
         # Case A: Active open partition
         if open_part is not None and part_rel_str == open_part:
@@ -165,6 +181,7 @@ class PartitionSyncHandler:
         timeframe: str,
         clean_df: pd.DataFrame,
         open_part: Optional[str],
+        force: bool = False,
     ) -> Tuple[List[str], Optional[str]]:
         """
         Route bars into monthly or yearly partitions and write them.
@@ -183,6 +200,7 @@ class PartitionSyncHandler:
                 part_df=part_df,
                 timeframe=timeframe,
                 open_part=open_part,
+                force=force,
             )
             if written:
                 written_files.append(written)
@@ -231,6 +249,7 @@ class SyncEngine:
         timeframe: str,
         start: Optional[Union[datetime, str]] = None,
         end: Optional[Union[datetime, str]] = None,
+        force: bool = False,
         dry_run: bool = False,
         strict_quality: bool = False,
     ) -> Dict[str, Any]:
@@ -267,6 +286,7 @@ class SyncEngine:
             req_start=start,
             req_end=end,
             latest_avail=latest_avail,
+            force=force,
         )
 
         if plan.is_up_to_date:
@@ -303,8 +323,8 @@ class SyncEngine:
                 "message": "All fetched bars dropped during validation.",
             }
 
-        # Filter strictly newer bars if doing forward sync without start
-        if start is None and cat_end is not None:
+        # Filter strictly newer bars if doing forward sync without start (and not forcing re-sync)
+        if not force and start is None and cat_end is not None:
             cat_end_dt = pd.to_datetime(cat_end, utc=True)
             clean_df = clean_df[clean_df["ts"] > cat_end_dt].copy()
             if clean_df.empty:
@@ -337,6 +357,7 @@ class SyncEngine:
             timeframe=norm_tf,
             clean_df=clean_df,
             open_part=open_part,
+            force=force,
         )
 
         # Step 7: Finalize catalog and manifest
@@ -429,6 +450,7 @@ class SyncEngine:
         timeframe: str = "1min",
         start: Optional[Union[datetime, str]] = None,
         end: Optional[Union[datetime, str]] = None,
+        force: bool = False,
         dry_run: bool = False,
         strict_quality: bool = False,
     ) -> List[Dict[str, Any]]:
@@ -455,6 +477,7 @@ class SyncEngine:
                         timeframe=timeframe,
                         start=start,
                         end=end,
+                        force=force,
                         dry_run=dry_run,
                         strict_quality=strict_quality,
                     )

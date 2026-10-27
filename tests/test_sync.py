@@ -186,6 +186,24 @@ def test_plan_sync_logic():
     p3 = plan_sync(c_start, c_end, req_start="2025-06-01", req_end="2025-08-01", latest_avail=latest)
     assert p3.is_up_to_date
 
+    # Force re-sync already covered range
+    p4 = plan_sync(c_start, c_end, req_start="2025-06-01", req_end="2025-08-01", latest_avail=latest, force=True)
+    assert not p4.is_up_to_date
+    assert p4.fetch_start == datetime(2025, 6, 1, tzinfo=timezone.utc)
+    assert p4.fetch_end == datetime(2025, 8, 1, tzinfo=timezone.utc)
+
+    # Force re-sync without req_start (re-sync from c_start)
+    p5 = plan_sync(c_start, c_end, req_start=None, req_end=None, latest_avail=latest, force=True)
+    assert not p5.is_up_to_date
+    assert p5.fetch_start == c_start
+    assert p5.fetch_end == latest
+
+    # Force re-sync on brand new dataset
+    p6 = plan_sync(None, None, req_start=None, req_end=None, latest_avail=latest, force=True)
+    assert not p6.is_up_to_date
+    assert p6.fetch_start is None
+    assert p6.fetch_end == latest
+
 
 def test_sync_historical_backfill(tmp_data_dir: Path):
     """
@@ -246,3 +264,83 @@ def test_sync_multiple_symbols_and_symbols_file(tmp_data_dir: Path, tmp_path: Pa
     res_file = engine.sync(provider_name="mock", symbols_file=csv_file, timeframe="1d")
     assert len(res_file) == 2
     assert [r["symbol"] for r in res_file] == ["CCC", "DDD"]
+
+
+def test_sync_force_resync_from_start(tmp_data_dir: Path):
+    """
+    Test that sync with force=True re-syncs all data from the start:
+    1. First sync -> success.
+    2. Second sync -> up_to_date.
+    3. Third sync with force=True -> success, re-syncs all bars.
+    """
+    engine = SyncEngine(tmp_data_dir)
+    fixed_time = datetime(2026, 9, 25, 15, 30, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=fixed_time)
+
+    # 1. Initial sync
+    res1 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min")
+    assert res1["status"] == "success"
+    initial_bars = res1["synced_bars"]
+    assert initial_bars > 0
+
+    # 2. Re-sync without force -> up_to_date
+    res2 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min", force=False)
+    assert res2["status"] == "up_to_date"
+    assert res2["synced_bars"] == 0
+
+    # 3. Re-sync WITH force=True -> re-fetches from start
+    res3 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min", force=True)
+    assert res3["status"] == "success"
+    assert res3["synced_bars"] == initial_bars
+
+    # Verify manifest integrity
+    manifest = ManifestManager(tmp_data_dir)
+    verify_results = manifest.verify_all()
+    assert len(verify_results) > 0
+    assert all(r["status"] == "ok" for r in verify_results)
+
+
+def test_sync_force_resync_multi_partition(tmp_data_dir: Path):
+    """
+    Test force re-sync across closed and open partitions:
+    August and September partitions are both updated when force=True is passed.
+    """
+    engine = SyncEngine(tmp_data_dir)
+    aug_time = datetime(2026, 8, 31, 23, 59, tzinfo=timezone.utc)
+    mock = MockProvider(data_dir=tmp_data_dir, mock_latest_time=aug_time)
+
+    # Sync August
+    res1 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min")
+    assert res1["status"] == "success"
+    aug_part = "raw/AAPL/1min/2026/2026-08.parquet"
+    assert res1["open_partition"] == aug_part
+
+    # Advance to September and sync
+    sep_time = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+    mock.set_mock_latest(sep_time)
+    res2 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min")
+    assert res2["status"] == "success"
+    sep_part = "raw/AAPL/1min/2026/2026-09.parquet"
+    assert res2["open_partition"] == sep_part
+
+    # Re-sync without force -> up_to_date
+    res3 = engine.sync_dataset(mock, symbol="AAPL", timeframe="1min", force=False)
+    assert res3["status"] == "up_to_date"
+
+    # Re-sync with force=True spanning both August and September
+    res4 = engine.sync_dataset(
+        mock,
+        symbol="AAPL",
+        timeframe="1min",
+        start="2026-08-31 20:00:00",
+        end="2026-09-01 10:00:00",
+        force=True,
+    )
+    assert res4["status"] == "success"
+    assert aug_part in res4["written_partitions"]
+    assert sep_part in res4["written_partitions"]
+
+    # Manifest integrity must hold
+    manifest = ManifestManager(tmp_data_dir)
+    verify_results = manifest.verify_all()
+    assert all(r["status"] == "ok" for r in verify_results)

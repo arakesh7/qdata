@@ -202,6 +202,7 @@ def sync_cmd(
     timeframe: str = typer.Option("1min", "--timeframe", help="Timeframe (1min, 1d)."),
     start: Optional[str] = typer.Option(None, "--start", help="Start date (YYYY-MM-DD or ISO string)."),
     end: Optional[str] = typer.Option(None, "--end", help="End date (YYYY-MM-DD or ISO string)."),
+    force: bool = typer.Option(False, "--force", "-F", help="Force re-sync data from the start."),
     data_dir: Optional[Path] = typer.Option(None, "--data-dir", help="Path to data directory."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Simulate sync without writing."),
     strict_quality: bool = typer.Option(False, "--strict-quality", help="Fail if quality checks warn or fail."),
@@ -222,6 +223,7 @@ def sync_cmd(
             timeframe=actual_tf,
             start=start,
             end=end,
+            force=force,
             dry_run=dry_run,
             strict_quality=strict_quality,
         )
