@@ -366,26 +366,74 @@ class AmfiProvider(BaseProvider):
         )
         return schemes[mask].reset_index(drop=True)
 
+    def resolve_isin(self, symbol: str) -> Optional[str]:
+        """
+        Resolve a user-provided symbol (scheme code or ISIN) to its corresponding ISIN.
+        Returns None if no matching ISIN can be identified.
+        """
+        sym = symbol.strip().upper()
+        try:
+            schemes = self.list_all_schemes()
+            if schemes is not None and not schemes.empty:
+                # 1. Match as ISIN directly
+                match_isin = schemes[(schemes["isin_growth"] == sym) | (schemes["isin_reinv"] == sym)]
+                if not match_isin.empty:
+                    return sym
+
+                # 2. Match as numeric scheme code -> extract ISIN
+                if sym.isdigit():
+                    match_code = schemes[schemes["scheme_code"] == sym]
+                    if not match_code.empty:
+                        for col in ("isin_growth", "isin_reinv"):
+                            val = match_code.iloc[0].get(col)
+                            if val and str(val).strip() and str(val).strip() != "-":
+                                return str(val).strip()
+        except Exception as e:
+            logger.debug(f"Could not resolve ISIN for '{sym}' from schemes cache: {e}")
+
+        # Check if symbol format matches standard 12-character ISIN (e.g. INF...)
+        if len(sym) == 12 and sym[:2].isalpha() and sym[2:].isalnum():
+            return sym
+
+        return None
+
+    def resolve_scheme_codes(self, symbol: str) -> List[str]:
+        """
+        Resolve a user-provided symbol (scheme code or ISIN) to all matching
+        AMFI numeric scheme codes.
+        When a fund changes its scheme code over time, the ISIN remains the same;
+        this discovers all current and historical scheme codes associated with the fund's ISIN.
+        """
+        sym = symbol.strip().upper()
+        codes: List[str] = []
+        try:
+            schemes = self.list_all_schemes()
+            if schemes is not None and not schemes.empty:
+                isin = self.resolve_isin(sym)
+                if isin:
+                    match_all = schemes[(schemes["isin_growth"] == isin) | (schemes["isin_reinv"] == isin)]
+                    codes = [str(c) for c in match_all["scheme_code"].dropna().unique() if str(c).strip()]
+                elif sym.isdigit():
+                    codes = [sym]
+        except Exception as e:
+            logger.debug(f"Could not resolve scheme codes for '{sym}' from schemes cache: {e}")
+
+        if not codes:
+            codes = [sym]
+
+        # Deduplicate while preserving numeric order
+        deduped = list(dict.fromkeys(codes))
+        return sorted(deduped, key=lambda c: int(c) if c.isdigit() else 0)
+
     def resolve_scheme_code(self, symbol: str) -> str:
         """
-        Resolve a user-provided symbol to an AMFI numeric scheme code.
+        Resolve a user-provided symbol to the primary/latest AMFI numeric scheme code.
         Accepts:
         - Direct numeric scheme code (e.g. '120503')
         - ISIN string (e.g. 'INF846K01WO1')
         """
-        sym = symbol.strip().upper()
-        if sym.isdigit():
-            return sym
-
-        try:
-            schemes = self.list_all_schemes()
-            match = schemes[(schemes["isin_growth"] == sym) | (schemes["isin_reinv"] == sym)]
-            if not match.empty:
-                return str(match.iloc[0]["scheme_code"])
-        except Exception as e:
-            logger.debug(f"Could not resolve symbol '{sym}' from schemes cache: {e}")
-
-        return sym
+        codes = self.resolve_scheme_codes(symbol)
+        return codes[-1] if codes else symbol.strip().upper()
 
     def get_scheme_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Return scheme master record metadata if known."""
@@ -415,32 +463,34 @@ class AmfiProvider(BaseProvider):
             logger.warning(f"AMFI only provides daily NAV data ('1d'), requested '{timeframe}'.")
             return None
 
-        scheme_code = self.resolve_scheme_code(symbol)
+        scheme_codes = self.resolve_scheme_codes(symbol)
 
-        # First check in master schemes list cache
-        try:
-            info = self.get_scheme_info(scheme_code)
-            if info and info.get("date"):
-                dt = pd.to_datetime(info["date"], format="%d-%b-%Y", errors="coerce", utc=True)
-                if pd.notna(dt):
-                    return dt.to_pydatetime()
-        except Exception as e:
-            logger.debug(f"Could not read latest date from scheme cache: {e}")
+        # Check from newest scheme_code to oldest
+        for scheme_code in reversed(scheme_codes):
+            # First check in master schemes list cache
+            try:
+                info = self.get_scheme_info(scheme_code)
+                if info and info.get("date"):
+                    dt = pd.to_datetime(info["date"], format="%d-%b-%Y", errors="coerce", utc=True)
+                    if pd.notna(dt):
+                        return dt.to_pydatetime()
+            except Exception as e:
+                logger.debug(f"Could not read latest date from scheme cache: {e}")
 
-        # Fallback: query historical records for recent 30-day window
-        now_utc = datetime.now(timezone.utc)
-        from_str = (now_utc - timedelta(days=30)).strftime("%Y-%m-%d")
-        to_str = now_utc.strftime("%Y-%m-%d")
+            # Fallback: query historical records for recent 30-day window
+            now_utc = datetime.now(timezone.utc)
+            from_str = (now_utc - timedelta(days=30)).strftime("%Y-%m-%d")
+            to_str = now_utc.strftime("%Y-%m-%d")
 
-        try:
-            records = self._fetch_historical_records(scheme_code, from_str, to_str)
-            if records:
-                latest_rec = max(records, key=lambda r: r.get("date", ""))
-                dt = pd.to_datetime(latest_rec["date"], format="%Y-%m-%d", errors="coerce", utc=True)
-                if pd.notna(dt):
-                    return dt.to_pydatetime()
-        except Exception as e:
-            logger.warning(f"Failed to query recent AMFI history for {scheme_code}: {e}")
+            try:
+                records = self._fetch_historical_records(scheme_code, from_str, to_str)
+                if records:
+                    latest_rec = max(records, key=lambda r: r.get("date", ""))
+                    dt = pd.to_datetime(latest_rec["date"], format="%Y-%m-%d", errors="coerce", utc=True)
+                    if pd.notna(dt):
+                        return dt.to_pydatetime()
+            except Exception as e:
+                logger.warning(f"Failed to query recent AMFI history for {scheme_code}: {e}")
 
         return None
 
@@ -465,7 +515,7 @@ class AmfiProvider(BaseProvider):
                 f"AMFI provider only supports daily ('1d') timeframe for mutual fund NAVs, got '{timeframe}'."
             )
 
-        scheme_code = self.resolve_scheme_code(symbol)
+        scheme_codes = self.resolve_scheme_codes(symbol)
 
         now_utc = datetime.now(timezone.utc)
         target_end = end or now_utc
@@ -490,20 +540,21 @@ class AmfiProvider(BaseProvider):
         nav_records: List[Dict[str, Any]] = []
 
         total_chunks = len(date_pairs)
-        if total_chunks > 1:
-            logger.info(
-                f"Fetching AMFI NAV history for scheme {scheme_code} from {start_str} to {end_str} "
-                f"in {total_chunks} chunks ({self.chunk_days} days/chunk)..."
-            )
-
-        for idx, (from_date, to_date) in enumerate(date_pairs, 1):
+        for scheme_code in scheme_codes:
             if total_chunks > 1:
                 logger.info(
-                    f"Fetching chunk {idx}/{total_chunks}: {from_date} to {to_date}..."
+                    f"Fetching AMFI NAV history for scheme {scheme_code} from {start_str} to {end_str} "
+                    f"in {total_chunks} chunks ({self.chunk_days} days/chunk)..."
                 )
-            self.rate_limit()
-            records = self._fetch_historical_records(scheme_code, from_date, to_date)
-            nav_records.extend(records)
+
+            for idx, (from_date, to_date) in enumerate(date_pairs, 1):
+                if total_chunks > 1:
+                    logger.info(
+                        f"Fetching chunk {idx}/{total_chunks} for scheme {scheme_code}: {from_date} to {to_date}..."
+                    )
+                self.rate_limit()
+                records = self._fetch_historical_records(scheme_code, from_date, to_date)
+                nav_records.extend(records)
 
         if not nav_records:
             return pd.DataFrame(columns=CANONICAL_COLUMNS)

@@ -123,9 +123,13 @@ def test_amfi_provider_schemes_parsing_and_search(tmp_data_dir: Path):
     assert len(res_isin) == 1
     assert res_isin.iloc[0]["scheme_code"] == "100033"
 
-    # Test resolve_scheme_code
+    # Test resolve_scheme_code and resolve_scheme_codes
     assert provider.resolve_scheme_code("120503") == "120503"
     assert provider.resolve_scheme_code("INF846K01164") == "120503"
+    assert provider.resolve_scheme_codes("120503") == ["120503"]
+    assert provider.resolve_scheme_codes("INF846K01164") == ["120503"]
+    assert provider.resolve_isin("120503") == "INF846K01164"
+    assert provider.resolve_isin("INF846K01164") == "INF846K01164"
 
 
 def test_amfi_provider_latest_available(tmp_data_dir: Path):
@@ -172,6 +176,78 @@ def test_amfi_provider_fetch_canonical_bars(tmp_data_dir: Path):
     assert first_row["volume"] == 0.0
     assert first_row["provider"] == "amfi"
     assert first_row["ts"] == pd.Timestamp("2024-01-01 00:00:00+00:00")
+
+
+def test_amfi_provider_isin_multi_scheme_code_download(tmp_data_dir: Path):
+    """
+    Verify that when a fund changes its scheme code over time (same ISIN),
+    fetching by ISIN or scheme code discovers all scheme codes and downloads
+    complete historical records across the scheme code transition.
+    """
+    multi_scheme_feed = """Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date
+
+Nippon India Mutual Fund
+
+142913;INF204KB1XK6;-;Nippon India Fund;Direct Plan;Growth Option;15.0;10-May-2021
+143452;INF204KB1XK6;-;Nippon India Fund;Direct Plan;Growth Option;20.0;26-May-2022
+"""
+    cache_path = tmp_data_dir / "catalog" / "amfi_schemes.parquet"
+    provider = AmfiProvider(data_dir=tmp_data_dir, schemes_cache_file=cache_path)
+
+    with patch.object(provider, "_fetch_raw_nav_lines", return_value=multi_scheme_feed.splitlines()):
+        provider.refresh_schemes()
+
+    # 1. Verify ISIN resolution
+    assert provider.resolve_isin("INF204KB1XK6") == "INF204KB1XK6"
+    assert provider.resolve_isin("142913") == "INF204KB1XK6"
+    assert provider.resolve_isin("143452") == "INF204KB1XK6"
+
+    # 2. Verify all scheme codes discovered
+    assert provider.resolve_scheme_codes("INF204KB1XK6") == ["142913", "143452"]
+    assert provider.resolve_scheme_codes("142913") == ["142913", "143452"]
+    assert provider.resolve_scheme_codes("143452") == ["142913", "143452"]
+
+    # 3. Verify latest scheme code
+    assert provider.resolve_scheme_code("INF204KB1XK6") == "143452"
+
+    # 4. Mock historical records for both scheme codes
+    def mock_fetch_records(scheme_id, from_date, to_date, current_depth=0):
+        if scheme_id == "142913":
+            return [
+                {"date": "2020-01-01", "nav": 12.50},
+                {"date": "2020-01-02", "nav": 12.60},
+            ]
+        elif scheme_id == "143452":
+            return [
+                {"date": "2022-01-01", "nav": 18.10},
+                {"date": "2022-01-02", "nav": 18.20},
+            ]
+        return []
+
+    with patch.object(provider, "_fetch_historical_records", side_effect=mock_fetch_records):
+        # Fetch using ISIN
+        df_isin = provider.fetch(
+            symbol="INF204KB1XK6",
+            timeframe="1d",
+            start=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2022, 12, 31, tzinfo=timezone.utc),
+        )
+        assert len(df_isin) == 4
+        assert df_isin["ts"].dt.strftime("%Y-%m-%d").tolist() == [
+            "2020-01-01",
+            "2020-01-02",
+            "2022-01-01",
+            "2022-01-02",
+        ]
+
+        # Fetch using old scheme code also pulls all records
+        df_code = provider.fetch(
+            symbol="142913",
+            timeframe="1d",
+            start=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2022, 12, 31, tzinfo=timezone.utc),
+        )
+        assert len(df_code) == 4
 
 
 def test_amfi_provider_sync_engine_integration(tmp_data_dir: Path):
